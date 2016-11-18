@@ -3,6 +3,7 @@ package Koha::Plugin::Com::Liliputech::RecommenderEngine;
 ## It's good practive to use Modern::Perl
 use Modern::Perl;
 use Data::Dumper;
+use DateTime;
 
 ## Required for all plugins
 use base qw(Koha::Plugins::Base);
@@ -22,7 +23,7 @@ our $metadata = {
     author => 'Arthur O Suzuki',
     description => 'This plugin implements recommendations for each Bibliographic reference based on all other borrowers old issues',
     date_authored   => '2016-06-27',
-    date_updated    => '2016-11-02',
+    date_updated    => '2016-11-18',
     minimum_version => '3.18.13.000',
     maximum_version => undef,
     version         => $VERSION,
@@ -47,6 +48,43 @@ sub new {
 
 sub install() {
     my ( $self, $args ) = @_;
+    my $dbh = C4::Context->dbh;
+    
+    ## Setup default configuration.
+    
+    ## First fetch value if UNIMARC or MARC21
+    my $query = "select value from systempreferences where variable='marcflavour'";
+    my $sth = $dbh->prepare($query);
+    $sth->execute();
+    my $marcflavour = ${$dbh->selectcol_arrayref($query)}[0];
+    
+    ## Create ExtractValue query according to MARC format
+    my $marcfilter;
+	if ($marcflavour eq 'UNIMARC') {
+        $marcfilter = "ExtractValue(marcxml,'//datafield[\@tag=\"200\"]/subfield[\@code=\"a\"]')";
+	} elsif ($marcflavour eq 'MARC21') {
+        $marcfilter = "ExtractValue(marcxml,'//datafield[\@tag=\"245\"]/subfield[\@code=\"a\"]')";
+    }
+
+    ## Set content filter to empty string
+    my $contentfilter = '';
+
+    ## Set number of recommendation to display on OPAC to 10 by default (fast execution)
+    my $recordnumber = 10;
+
+    ## Set Issues interval analysis to 5 YEAR (Pure SQL)
+    my $interval = '5 YEAR';
+    
+    $self->store_data(
+        {
+            marcfilter => $marcfilter,
+            contentfilter => $contentfilter,
+            recordnumber => $recordnumber,
+            interval => $interval,
+            last_configured_at => DateTime->now,
+            last_configured_by => C4::Context->userenv->{'number'},
+        }
+    );
     return 1;
 }
 
@@ -69,9 +107,33 @@ sub configure() {
     unless ( $cgi->param('save') ) {
         my $template = $self->get_template( { file => 'configure.tt' } );
 
-        ## Grab the values we already have for our settings, if any exist
-        $template->param( recordnumber => $self->retrieve_data('recordnumber'), interval => $self->retrieve_data('interval'), last_configured_by => $self->retrieve_data('last_configured_by'), );
+        my ($marcfilter, $contentfilter, $recordnumber, $interval, $last_configured_at, $last_configured_by);
 
+        ## Grab the values we already have for our settings, if any exist
+        $self->retrieve_data(
+            {
+                marcfilter => $marcfilter,
+                contentfilter => $contentfilter,
+                recordnumber => $recordnumber,
+                interval => $interval,
+                last_configured_at => $last_configured_at,
+                last_configured_by => $last_configured_by,
+            }
+        );
+
+       ## Apply to configure template
+       $template->param(
+                marcfilter => $marcfilter,
+                contentfilter => $contentfilter,
+                recordnumber => $recordnumber,
+                interval => $interval,
+                last_configured_at => $last_configured_at,
+                last_configured_by => $last_configured_by,
+       );
+
+        #Could be like this :
+        #my $contentfilter = "and items.statisticvalue in (select distinct statisticvalue from items where biblioitemnumber = '$biblionumber')";
+ 
         print $cgi->header(
                 {
                 -type     => 'text/html',
@@ -83,15 +145,22 @@ sub configure() {
     }
 
     else {
+        my $marcfilter = $cgi->param('marcfilter');
+        my $contentfilter = $cgi->param('contentfilter');
         my $recordnumber = $cgi->param('recordnumber');
         my $interval = $cgi->param('interval');
+
         $self->store_data(
             {
+                marcfilter => $marcfilter,
+                contentfilter => $contentfilter,
                 recordnumber => $recordnumber,
                 interval => $interval,
+                last_configured_at => DateTime->now,
                 last_configured_by => C4::Context->userenv->{'number'},
             }
         );
+
         $self->updateJS($recordnumber);
         $self->go_home();
     }
@@ -151,59 +220,48 @@ sub report_step1 {
 sub report_step2 {
     my ( $self, $args ) = @_;
     my $cgi = $self->{'cgi'};
-
     my $dbh = C4::Context->dbh;
- 
+
+    ## Get configuration
+    my ($marcfilter, $contentfilter, $recordnumber, $interval);
+    $self->retrieve_data(
+        {
+            marcfilter => $marcfilter,
+            contentfilter => $contentfilter,
+            recordnumber => $recordnumber,
+            interval => $interval,
+        }
+    );
+
     ##Biblionumber to query
     my $biblionumber = scalar $cgi->param('biblionumber');
 
-	##Eventually set a limit to the number of results to display
-	my $limit = "";
-	my $recordnumber = scalar $cgi->param('recordnumber');
-	if($recordnumber) {
-		$limit = "limit $recordnumber";
-	}
-    
-	##Choose how to output data (set to html if undefined)
-	my $template;
-	my $output = scalar $cgi->param('output');
-	if ($output eq 'csv') {
-		$template = $self->get_template({ file => 'report-step2-csv.tt' });
-		print "Content-type: text/csv\n\n";
-	}
-	elsif ($output eq 'json') {
-		$template = $self->get_template({ file => 'report-step2-json.tt' });
-		print "Content-type: application/json\n\n";
-	}
-	else {
+    ##Choose how to output data (set to html if undefined)
+    my $template;
+    my $output = scalar $cgi->param('output');
+    if ($output eq 'csv') {
+        $template = $self->get_template({ file => 'report-step2-csv.tt' });
+        print "Content-type: text/csv\n\n";
+    }
+    elsif ($output eq 'json') {
+        $template = $self->get_template({ file => 'report-step2-json.tt' });
+        print "Content-type: application/json\n\n";
+    }
+    else {
         $template = $self->get_template({ file => 'report-step2.tt' });
-	    print "Content-type: text/html\n\n";
+        print "Content-type: text/html\n\n";
     }
 
-    ## Get Interval to analyse
-    my $interval = $self->retrieve_data('interval');	
-    ## First fetch value if UNIMARC or MARC21
-    my $query = "select value from systempreferences where variable='marcflavour'";
-    my $sth = $dbh->prepare($query);
-    $sth->execute();
-    my $marcflavour = ${$dbh->selectcol_arrayref($query)}[0];
-    
-    ## Create ExtractValue query according to MARC format
-    my $marcfilter;
-	if ($marcflavour eq 'UNIMARC') {
-        $marcfilter = "ExtractValue(marcxml,'//datafield[\@tag=\"200\"]/subfield[\@code=\"a\"]')";
-	} elsif ($marcflavour eq 'MARC21') {
-        $marcfilter = "ExtractValue(marcxml,'//datafield[\@tag=\"245\"]/subfield[\@code=\"a\"]')";
+    ##Eventually set a limit to the number of results to display
+    my $limit = "";
+    if($recordnumber) {
+        $limit = "limit $recordnumber";
     }
-
-    my $contentfilter = "";
-    #Could be like this :
-    #my $contentfilter = "and items.statisticvalue in (select distinct statisticvalue from items where biblioitemnumber = '$biblionumber')";
     
     ## Wow such a big shit...
     ##Query ok for UNIMARC Format (200a), this has to be changed in configuration if another cataloging format is to be used.
 
-    $query = "
+    my $query = "
 	select suggestions.biblioitemnumber as biblionumber, $marcfilter AS title, totalPrets as nissues from biblioitems
 	inner join (
 	select distinct biblioitemnumber, sum(pretExemplaire) totalPrets from items inner join (
@@ -225,7 +283,7 @@ sub report_step2 {
 	$limit) suggestions
 	on biblioitems.biblioitemnumber=suggestions.biblioitemnumber";
 
-    $sth = $dbh->prepare($query);
+    my $sth = $dbh->prepare($query);
     $sth->execute();
 
     my @results;
