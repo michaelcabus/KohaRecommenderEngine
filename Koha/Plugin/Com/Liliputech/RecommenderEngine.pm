@@ -100,46 +100,46 @@ sub uninstall() {
     C4::Context->set_preference( 'opacuserjs', $opacuserjs );
 }
 
+sub AddSlashes {
+    my $text = shift;
+## Make sure to do the backslash first!
+    $text =~ s/\\/\\\\/g;
+    $text =~ s/'/\\'/g;
+    $text =~ s/"/\\"/g;
+    $text =~ s/\\0/\\\\0/g;
+    return $text;
+}
+ 
 sub configure() {
     my ( $self, $args ) = @_;
     my $cgi = $self->{'cgi'};
 
     unless ( $cgi->param('save') ) {
         my $template = $self->get_template( { file => 'configure.tt' } );
+        my $dbh = C4::Context->dbh;
 
-        my ($marcfilter, $contentfilter, $recordnumber, $interval, $last_configured_at, $last_configured_by);
-
-        ## Grab the values we already have for our settings, if any exist
-        $self->retrieve_data(
-            {
-                marcfilter => $marcfilter,
-                contentfilter => $contentfilter,
-                recordnumber => $recordnumber,
-                interval => $interval,
-                last_configured_at => $last_configured_at,
-                last_configured_by => $last_configured_by,
-            }
-        );
-
-       ## Apply to configure template
+       ## Grab the values we already have for our settings, if any exist
+       ## And apply to configure template
+       my $sanitizedmarcfilter = $self->retrieve_data('marcfilter');
+ 
        $template->param(
-                marcfilter => $marcfilter,
-                contentfilter => $contentfilter,
-                recordnumber => $recordnumber,
-                interval => $interval,
-                last_configured_at => $last_configured_at,
-                last_configured_by => $last_configured_by,
+#                marcfilter => $sanitizedmarcfilter,
+                contentfilter => $self->retrieve_data('contentfilter'),
+                recordnumber => $self->retrieve_data('recordnumber'),
+                interval => $self->retrieve_data('interval'),
+                last_configured_at => $self->retrieve_data('last_configured_at'),
+                last_configured_by => $self->retrieve_data('last_configured_by'),
        );
 
         #Could be like this :
         #my $contentfilter = "and items.statisticvalue in (select distinct statisticvalue from items where biblioitemnumber = '$biblionumber')";
  
         print $cgi->header(
-                {
+            {
                 -type     => 'text/html',
                 -charset  => 'UTF-8',
                 -encoding => "UTF-8"
-                }
+            }
                 );
         print $template->output();
     }
@@ -152,7 +152,7 @@ sub configure() {
 
         $self->store_data(
             {
-                marcfilter => $marcfilter,
+ #               marcfilter => $marcfilter,
                 contentfilter => $contentfilter,
                 recordnumber => $recordnumber,
                 interval => $interval,
@@ -223,15 +223,10 @@ sub report_step2 {
     my $dbh = C4::Context->dbh;
 
     ## Get configuration
-    my ($marcfilter, $contentfilter, $recordnumber, $interval);
-    $self->retrieve_data(
-        {
-            marcfilter => $marcfilter,
-            contentfilter => $contentfilter,
-            recordnumber => $recordnumber,
-            interval => $interval,
-        }
-    );
+    my $marcfilter = $self->retrieve_data('marcfilter');
+    my $contentfilter = $self->retrieve_data('contentfilter');
+    my $recordnumber = $self->retrieve_data('recordnumber');
+    my $interval = $self->retrieve_data('interval');
 
     ##Biblionumber to query
     my $biblionumber = scalar $cgi->param('biblionumber');
@@ -259,7 +254,6 @@ sub report_step2 {
     }
     
     ## Wow such a big shit...
-    ##Query ok for UNIMARC Format (200a), this has to be changed in configuration if another cataloging format is to be used.
 
     my $query = "
 	select suggestions.biblioitemnumber as biblionumber, $marcfilter AS title, totalPrets as nissues from biblioitems

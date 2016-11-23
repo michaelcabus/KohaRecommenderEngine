@@ -24,6 +24,8 @@
 <td>Type here some SQL to select which past period to analyse (1 YEAR, 1 MONTH, 7 DAY, 52 WEEK, etc...) </td><td> <input type="text" name="interval" value="[% interval %]" /></td>
 </tr><tr>
 <td>Type here some SQL to define which references to display (title, author, etc...) </td><td> <input type="text" name="marcfilter" value="[% marcfilter %]" /></td>
+</tr><tr>
+<td>Type here some SQL to define some content-filter </td><td> <input type="text" name="contentfilter" value="[% contentfilter %]" /></td>
 </tr>
 </table>
 
